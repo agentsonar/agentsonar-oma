@@ -1,0 +1,28 @@
+# Secrets — never commit
+.env
+*.key
+
+# Build artifacts
+dist/
+*.tsbuildinfo
+
+# Dependencies
+node_modules/
+.venv/
+
+# AgentSonar runtime output (regenerated per run)
+agentsonar_logs/
+trace.jsonl
+
+# Internal notes — strategy, design, study material (not for public)
+notes/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc

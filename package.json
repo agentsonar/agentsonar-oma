@@ -1,0 +1,40 @@
+{
+  "name": "@agentsonar/oma",
+  "version": "0.1.0-alpha.1",
+  "description": "AgentSonar integration for Open Multi-Agent (OMA) — bridges OMA task graphs and trace events to the AgentSonar coordination engine.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "demo": "tsx examples/demo.ts",
+    "test": "node --test --import tsx tests/safety.test.ts tests/edges.test.ts tests/trace.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "@jackchen_me/open-multi-agent": ">=1.2.0"
+  },
+  "devDependencies": {
+    "@jackchen_me/open-multi-agent": ">=1.2.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.6.0"
+  },
+  "keywords": [
+    "multi-agent",
+    "observability",
+    "open-multi-agent",
+    "agentsonar",
+    "coordination"
+  ],
+  "license": "Apache-2.0"
+}
