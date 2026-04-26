@@ -18,8 +18,8 @@
  * fire-and-forget.
  */
 
-import { OpenMultiAgent } from '../../open-multi-agent/src/index.js'
-import type { AgentConfig, TraceEvent } from '../../open-multi-agent/src/types.js'
+import { OpenMultiAgent } from '@jackchen_me/open-multi-agent'
+import type { AgentConfig, TraceEvent } from '@jackchen_me/open-multi-agent'
 import {
   emitDelegations,
   createTraceHandler,

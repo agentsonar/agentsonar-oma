@@ -96,6 +96,32 @@ The demo runs a 4-task workflow `researcher → reviewer → writer → research
 
 When the demo finishes, the sidecar prints the report path. Open it in a browser to see the graph and detected alerts.
 
+## What the output looks like
+
+Every run produces a self-contained HTML report at `agentsonar_logs/run-<slug>/report.html` — no external CSS or JavaScript, no network requests, dark mode that respects your system preference. Two top-level tabs organize the view:
+
+**1. Coordination Failures** — the primary signal. One card per detected failure with severity badge, failure class (hover for a definition), fingerprint, and expandable topology / thresholds / provider-error / downstream-impact blocks. Filter chips at the top let you narrow to Critical or Warning with one click.
+
+![Coordination Failures tab — the primary signal, Sentry-style](docs/images/coordination-failures.png)
+
+**2. Session Activity** — INFO-level context, always one click away. Two sub-tabs switch between lenses on the same run:
+
+- **Edge Activity** — every delegation edge the graph saw, with fire count and severity attribution. Red border = edge involved in a critical alert, no border = clean.
+- **Chronological Log** — raw event stream with timestamps. Rows color-coded where an alert fired: light red for critical, light orange for warning.
+
+![Session Activity tab — Edge Activity view](docs/images/session-activity.png)
+
+The "Coordination Failures — Raw JSON" drop-down at the bottom of every report carries the same payload as `report.json` — copy it straight into a dashboard or CI gate without opening a second file.
+
+All four output files land in a per-run session directory under `agentsonar_logs/`:
+
+| File | Written | Purpose |
+|---|---|---|
+| `timeline.jsonl` | **Live — flushed on every event** | Every event, one JSON object per line. Tail with `tail -f` to watch what's happening as your OMA run progresses. |
+| `alerts.log` | **Live — flushed on every alert** | Signal-only, human-readable. The "just show me the problems" view. |
+| `report.json` | On `shutdown()` | Structured summary report, deduped + inhibited. Pipe into your dashboard. |
+| `report.html` | On `shutdown()` | The standalone two-tab HTML report shown above. |
+
 ## Configuration
 
 Two config surfaces.
@@ -191,4 +217,10 @@ The TypeScript client is fire-and-forget. Every HTTP call has a 2-second timeout
 
 ## Links
 
-- [Open Multi-Agent](https://github.com/JackChen-me/open-multi-agent)
+- **AgentSonar** — [GitHub](https://github.com/agentsonar/agentsonar) · [PyPI](https://pypi.org/project/agentsonar/) · [npm `@agentsonar/oma`](https://www.npmjs.com/package/@agentsonar/oma)
+- **Open Multi-Agent** — [GitHub](https://github.com/JackChen-me/open-multi-agent) · [npm `@jackchen_me/open-multi-agent`](https://www.npmjs.com/package/@jackchen_me/open-multi-agent)
+- **Issues / feature requests** — [agentsonar/agentsonar issues](https://github.com/agentsonar/agentsonar/issues)
+
+## License
+
+Apache-2.0

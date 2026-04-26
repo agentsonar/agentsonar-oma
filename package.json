@@ -25,6 +25,14 @@
   "engines": {
     "node": ">=18"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/agentsonar/agentsonar-oma.git"
+  },
+  "homepage": "https://github.com/agentsonar/agentsonar-oma",
+  "bugs": {
+    "url": "https://github.com/agentsonar/agentsonar/issues"
+  },
   "peerDependencies": {
     "@jackchen_me/open-multi-agent": ">=1.2.0"
   },
