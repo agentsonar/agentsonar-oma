@@ -11,6 +11,11 @@
       "import": "./dist/index.js"
     }
   },
+  "files": [
+    "dist/",
+    "sidecar/",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
     "demo": "tsx examples/demo.ts",

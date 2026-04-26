@@ -12,36 +12,24 @@ Three classes of multi-agent coordination failures, computed deterministically o
 
 Output is a standalone HTML report at `agentsonar_logs/run-<slug>/report.html`.
 
+## How this complements OMA's runtime guards
+
+OMA blocks same-chain `A → B → A` cycles at delegate-tool time (`delegate.ts:60`). `@agentsonar/oma` catches the cumulative-graph patterns those guards don't see — cycles and repetition that emerge across independent chains or across runs.
+
 ## Install
 
-> **v0.1.0-alpha — not yet published to npm.** Install from a local clone of this repo.
+```powershell
+# TypeScript client (alpha tag — explicit opt-in)
+npm install @agentsonar/oma@alpha
 
-```bash
-git clone https://github.com/agentsonar/agentsonar-oma.git
-cd agentsonar-oma
-
-# Python sidecar dependencies (the `agentsonar` package, from PyPI)
-pip install -r sidecar/requirements.txt
-
-# Node devDependencies + compile the TypeScript client
-npm install
-npm run build
+# Python sidecar dependency
+pip install agentsonar
 ```
 
-To use the TypeScript client in your own project before we publish to npm, either link it locally:
+The npm package ships with the Python sidecar script bundled at `node_modules/@agentsonar/oma/sidecar/sidecar.py`. Run it from there or copy it next to your app code:
 
-```bash
-# From this repo
-npm link
-
-# From your own project
-npm link @agentsonar/oma
-```
-
-Or install via local path:
-
-```bash
-npm install /path/to/agentsonar-oma
+```powershell
+python node_modules/@agentsonar/oma/sidecar/sidecar.py
 ```
 
 Requirements: Node 18+, Python 3.10+.
