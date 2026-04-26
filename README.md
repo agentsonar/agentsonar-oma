@@ -19,8 +19,8 @@ OMA blocks same-chain `A → B → A` cycles at delegate-tool time (`delegate.ts
 ## Install
 
 ```powershell
-# TypeScript client (alpha tag — explicit opt-in)
-npm install @agentsonar/oma@alpha
+# TypeScript client
+npm install @agentsonar/oma
 
 # Python sidecar dependency
 pip install agentsonar
