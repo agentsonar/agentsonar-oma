@@ -1,6 +1,6 @@
 {
   "name": "@agentsonar/oma",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "AgentSonar integration for Open Multi-Agent (OMA) — bridges OMA task graphs and trace events to the AgentSonar coordination engine.",
   "type": "module",
   "main": "./dist/index.js",
