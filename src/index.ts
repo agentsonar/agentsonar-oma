@@ -26,6 +26,104 @@ import type { TraceEvent } from '@jackchen_me/open-multi-agent'
 const DEFAULT_ENDPOINT = 'http://localhost:8787'
 const DEFAULT_TIMEOUT_MS = 2000
 
+/**
+ * Thrown by `emitDelegations()` (and only `emitDelegations()`) when the
+ * Python sidecar reports that Prevent Mode has tripped. Mirrors the Python
+ * SDK's `agentsonar.PreventError`: same field shape, same intent — stop
+ * the user's loop with one specific exception type while every other SDK
+ * failure mode stays swallowed.
+ *
+ * To enable Prevent Mode, start the sidecar with:
+ *
+ *     python sidecar/sidecar.py --prevent-cyclic-delegation
+ *
+ * Then catch in your code:
+ *
+ *     try {
+ *       await emitDelegations(tasks)
+ *       await orchestrator.runTasks(team, tasks)
+ *     } catch (e) {
+ *       if (e instanceof PreventError) {
+ *         console.log(`Stopped: ${e.reason}`)
+ *         console.log(`Cycle:   ${e.cyclePath.join(' -> ')}`)
+ *       } else {
+ *         throw e
+ *       }
+ *     }
+ *
+ * Once raised, the sidecar's tracked state stays tripped — subsequent
+ * `emitDelegations()` calls on the same sidecar will keep throwing. To
+ * reset, restart the sidecar.
+ */
+export class PreventError extends Error {
+  readonly failureClass: string
+  readonly severity: string
+  readonly rotations: number
+  readonly cyclePath: readonly string[]
+  readonly reason: string
+  readonly timestamp: number
+
+  constructor(data: {
+    failureClass: string
+    severity: string
+    rotations: number
+    cyclePath: readonly string[]
+    reason: string
+    timestamp: number
+  }) {
+    super(data.reason)
+    // Restore prototype chain so `instanceof PreventError` works after
+    // transpilation to ES5 — common gotcha when extending built-ins.
+    Object.setPrototypeOf(this, PreventError.prototype)
+    this.name = 'PreventError'
+    this.failureClass = data.failureClass
+    this.severity = data.severity
+    this.rotations = data.rotations
+    this.cyclePath = data.cyclePath
+    this.reason = data.reason
+    this.timestamp = data.timestamp
+  }
+}
+
+/**
+ * Parse a Problem Details body (RFC 7807) into a PreventError, IF and
+ * only if it carries the agentsonar prevent extension. Returns null
+ * for any other shape — including a plain 409 from a misconfigured
+ * proxy or a JSON body that just happens to share the content type.
+ *
+ * The three guards (status, content-type, agentsonar key) all have to
+ * line up. This keeps the throw path tight: only an actual sidecar
+ * trip triggers an exception in the user's code.
+ */
+function tryParsePreventBody(body: unknown): PreventError | null {
+  if (!body || typeof body !== 'object') return null
+  const data = body as Record<string, unknown>
+  const ext = data['agentsonar']
+  if (!ext || typeof ext !== 'object') return null
+  const e = ext as Record<string, unknown>
+  // Defensive coercion — sidecar should always populate these but a
+  // bad body shouldn't crash the client. Default sensibly.
+  const failureClass = typeof e['failure_class'] === 'string'
+    ? (e['failure_class'] as string) : 'unknown'
+  const severity = typeof e['severity'] === 'string'
+    ? (e['severity'] as string) : 'CRITICAL'
+  const rotations = typeof e['rotations'] === 'number'
+    ? (e['rotations'] as number) : 0
+  const cyclePathRaw = e['cycle_path']
+  const cyclePath = Array.isArray(cyclePathRaw)
+    ? cyclePathRaw.filter((x): x is string => typeof x === 'string')
+    : []
+  const reason = typeof e['reason'] === 'string'
+    ? (e['reason'] as string)
+    : (typeof data['detail'] === 'string'
+        ? (data['detail'] as string) : 'coordination prevented')
+  const timestamp = typeof e['timestamp'] === 'number'
+    ? (e['timestamp'] as number) : Date.now() / 1000
+  return new PreventError({
+    failureClass, severity, rotations, cyclePath, reason, timestamp,
+  })
+}
+
 // Module-level state for the "sidecar unreachable" one-time warning.
 // We print a friendly note on the FIRST connection-refused error so users
 // who forgot to start the sidecar get a clear heads-up, then stay quiet
@@ -157,6 +255,7 @@ async function post(
   timeoutMs: number,
   endpoint: string,
 ): Promise<void> {
+  let bodyConsumed = false
   try {
     // JSON.stringify could theoretically throw on a circular reference.
     // Do it inside the try so any such throw is swallowed.
@@ -168,6 +267,28 @@ async function post(
       // Bound the wait so a hung sidecar can never block the OMA run.
       signal: AbortSignal.timeout(timeoutMs),
     })
+
+    // Prevent Mode trip detection. Three guards must ALL line up
+    // (status + content-type + body shape) so a generic 409 from a
+    // misconfigured proxy can't accidentally throw into user code.
+    if (res.status === 409) {
+      const ct = res.headers.get('content-type') || ''
+      if (ct.includes('application/problem+json')) {
+        let parsed: unknown = null
+        try {
+          parsed = await res.json()
+          bodyConsumed = true
+        } catch {
+          // Body wasn't valid JSON despite the content-type. Treat as
+          // a non-prevent 409 — fall through to the normal log path.
+        }
+        const preventError = tryParsePreventBody(parsed)
+        if (preventError !== null) {
+          throw preventError
+        }
+      }
+    }
+
     if (debug && !res.ok) {
       try {
         console.error(`[agentsonar-oma] POST ${url} -> ${res.status}`)
@@ -181,13 +302,21 @@ async function post(
     // for several seconds after the last call, so the user's script
     // appears to hang after `await shutdown()`. Consuming the body
     // returns the connection to the idle pool and lets the process exit.
-    try {
-      await res.text()
-    } catch {
-      // If body read fails (connection closed mid-stream), that's fine —
-      // we didn't need the body anyway.
+    if (!bodyConsumed) {
+      try {
+        await res.text()
+      } catch {
+        // If body read fails (connection closed mid-stream), that's fine —
+        // we didn't need the body anyway.
+      }
     }
   } catch (err) {
+    // PreventError is the ONE exception type intentionally allowed to
+    // propagate. Every other failure (network, parsing, sidecar bug)
+    // stays caught — host-safety contract preserved.
+    if (err instanceof PreventError) {
+      throw err
+    }
     // Sidecar unreachable: print ONE friendly warning, then stay quiet
     // (unless debug=true). This is the common "user forgot to start
     // the sidecar" case — we want them to notice, not to get flooded.
@@ -348,6 +477,13 @@ export async function emitDelegations(
     }
     return emitted
   } catch (err) {
+    // PreventError is the ONE exception type emitDelegations is allowed
+    // to throw — only when the sidecar was started with
+    // --prevent-cyclic-delegation AND a tracked failure has tripped.
+    // The user's `try/catch (e instanceof PreventError)` block catches it.
+    if (err instanceof PreventError) {
+      throw err
+    }
     // Absolute belt-and-suspenders. We should have caught everything by
     // now, but any remaining surprise never propagates to the user.
     try {

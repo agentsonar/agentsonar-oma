@@ -19,7 +19,8 @@
   "scripts": {
     "build": "tsc",
     "demo": "tsx examples/demo.ts",
-    "test": "node --test --import tsx tests/safety.test.ts tests/edges.test.ts tests/trace.test.ts",
+    "prevent-demo": "tsx examples/prevent.demo.ts",
+    "test": "node --test --import tsx tests/safety.test.ts tests/edges.test.ts tests/trace.test.ts tests/prevent.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "engines": {

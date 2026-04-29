@@ -155,6 +155,8 @@ Pass as CLI flags to the sidecar, or set env vars before starting it. Run `pytho
 | `--no-console` | — | — | Suppress alert streaming to stderr |
 | `--no-report` | — | — | Skip the HTML/JSON report write |
 | `--report-title` | `AGENTSONAR_REPORT_TITLE` | `"AgentSonar Report"` | HTML report title |
+| `--prevent-cyclic-delegation` | `AGENTSONAR_PREVENT_CYCLIC_DELEGATION` | off | Enable Prevent Mode (see below) |
+| `--prevent-max-rotations` | `AGENTSONAR_PREVENT_MAX_ROTATIONS` | — | Trip Prevent Mode at exactly N rotations (overrides CRITICAL severity gating) |
 
 Resolution order: CLI flag > env var > SDK default.
 
@@ -175,6 +177,92 @@ Then on the Node side:
 ```ts
 await emitDelegations(tasks, { endpoint: 'http://localhost:9100' })
 ```
+
+## Prevent Mode
+
+Opt-in "circuit breaker" mode. When enabled, the sidecar's coordination engine raises an exception in the TypeScript client if it detects a cycle that crosses the trip threshold — letting your code stop a runaway workflow before more tokens are spent.
+
+### How it works
+
+1. Start the sidecar with `--prevent-cyclic-delegation`.
+2. When a tracked failure (currently `cyclic_delegation`) crosses CRITICAL severity, the sidecar answers the next `/ingest` with HTTP 409 + RFC 7807 Problem Details (`Content-Type: application/problem+json`).
+3. The TS client detects this exact response shape and throws `PreventError` from `emitDelegations()` into your code.
+4. Every other failure mode (network errors, plain 409s, malformed responses, 500s) stays silently swallowed — only `PreventError` ever reaches your `try/catch`.
+
+### Quickstart
+
+```powershell
+# Sidecar — enable Prevent Mode
+python sidecar/sidecar.py --prevent-cyclic-delegation
+```
+
+```ts
+import {
+  emitDelegations,
+  shutdown,
+  PreventError,
+  type DelegationTask,
+} from '@agentsonar/oma'
+
+const tasks: DelegationTask[] = [/* ... */]
+
+try {
+  await emitDelegations(tasks)
+  await orchestrator.runTasks(team, tasks)
+} catch (e) {
+  if (e instanceof PreventError) {
+    console.log(`Stopped: ${e.reason}`)
+    console.log(`Cycle:   ${e.cyclePath.join(' -> ')}`)
+    console.log(`After:   ${e.rotations} rotations (severity ${e.severity})`)
+  } else {
+    throw e
+  }
+} finally {
+  await shutdown()
+}
+```
+
+### Custom trip threshold
+
+By default Prevent Mode trips on CRITICAL severity (= `--critical-threshold` rotations, default 15). To trip earlier:
+
+```powershell
+python sidecar/sidecar.py --prevent-cyclic-delegation --prevent-max-rotations 5
+```
+
+This trips at exactly rotation 5 regardless of severity gating. Useful for tight test loops or production caps below the default CRITICAL threshold.
+
+### Wire format
+
+The 409 response body follows [RFC 7807 Problem Details](https://datatracker.ietf.org/doc/html/rfc7807) with an `agentsonar` extension namespace:
+
+```json
+{
+  "type": "https://github.com/agentsonar/agentsonar/blob/main/docs/problems/coordination-prevented.md",
+  "title": "Coordination Failure Prevented",
+  "status": 409,
+  "detail": "cyclic_delegation prevented after 15 rotations: a -> b -> c",
+  "instance": "/ingest",
+  "agentsonar": {
+    "failure_class": "cyclic_delegation",
+    "severity": "CRITICAL",
+    "rotations": 15,
+    "cycle_path": ["a", "b", "c"],
+    "reason": "cyclic_delegation prevented after 15 rotations: a -> b -> c",
+    "timestamp": 1714089600.123
+  }
+}
+```
+
+Additional response headers:
+- `Cache-Control: no-cache, no-store` — discourage proxy caching of this informational state
+- `X-AgentSonar-Prevent: cyclic_delegation` — cheap observability hook for proxy/log inspection
+
+### Limitations
+
+- **Once tripped, the sidecar's tracked state stays tripped.** Subsequent `emitDelegations` calls keep throwing `PreventError`. To resume detection, restart the sidecar.
+- **Prevent Mode catches static-DAG cycles only in v1** (cycles visible at `emitDelegations` time from the `dependsOn` graph). Cycles that emerge at runtime via the OMA orchestrator's `runTasks` are not yet wired into the engine — that's a v2 enhancement.
+- **Sidecar must be reachable.** If the sidecar is down, `emitDelegations` warns once and continues — no `PreventError` is thrown because detection isn't running.
 
 ## Sidecar lifecycle
 

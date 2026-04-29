@@ -36,7 +36,7 @@ import time
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from agentsonar import monitor_orchestrator
+from agentsonar import PreventError, monitor_orchestrator
 
 # ----------------------------------------------------------------------
 # CLI config — env var fallbacks documented inline. Resolution order:
@@ -75,19 +75,30 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     alert = p.add_argument_group(
         "alert thresholds",
         description=(
-            "How many rotations / events before a cyclic_delegation or "
-            "repetitive_delegation alert escalates from WARNING to CRITICAL."
+            "Rotation/event counts AT which a cyclic_delegation or "
+            "repetitive_delegation alert fires. Inclusive — `>=` "
+            "comparison. `--warning-threshold 5` means rotation 5 is the "
+            "first WARNING (rotation 4 is still clean). Same convention "
+            "as LangGraph's `recursion_limit`."
         ),
     )
     alert.add_argument(
         "--warning-threshold", type=int,
         default=int(_env("AGENTSONAR_WARNING_THRESHOLD", "5") or "5"),
-        help="Rotations/count to fire WARNING (env: AGENTSONAR_WARNING_THRESHOLD). Default: 5.",
+        help=(
+            "Rotation count AT which WARNING fires (inclusive `>=`). "
+            "Default: 5 — i.e. rotation 5 is the trigger, not rotation 6. "
+            "Env: AGENTSONAR_WARNING_THRESHOLD."
+        ),
     )
     alert.add_argument(
         "--critical-threshold", type=int,
         default=int(_env("AGENTSONAR_CRITICAL_THRESHOLD", "15") or "15"),
-        help="Rotations/count to fire CRITICAL (env: AGENTSONAR_CRITICAL_THRESHOLD). Default: 15.",
+        help=(
+            "Rotation count AT which CRITICAL fires (inclusive `>=`). "
+            "Default: 15 — i.e. rotation 15 IS the trigger, not 16. "
+            "Env: AGENTSONAR_CRITICAL_THRESHOLD."
+        ),
     )
     alert.add_argument(
         "--resolve-after", type=float,
@@ -130,6 +141,40 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Z-score to fire repetitive_delegation. Default: 3.0.",
     )
 
+    prevent = p.add_argument_group(
+        "prevent mode",
+        description=(
+            "Opt-in 'circuit breaker' mode. When the engine detects a "
+            "tracked failure (currently only cyclic_delegation) crossing "
+            "the trip threshold, the next /ingest request is answered "
+            "with HTTP 409 + RFC 7807 Problem Details so the TypeScript "
+            "client can throw PreventError into the user's code. Without "
+            "these flags, the sidecar runs in pure detection mode."
+        ),
+    )
+    prevent.add_argument(
+        "--prevent-cyclic-delegation", action="store_true",
+        default=_env("AGENTSONAR_PREVENT_CYCLIC_DELEGATION", "").lower()
+        in ("1", "true", "yes", "on"),
+        help=(
+            "Enable Prevent Mode for cyclic_delegation. Default trip "
+            "behavior is on CRITICAL severity. Env: "
+            "AGENTSONAR_PREVENT_CYCLIC_DELEGATION."
+        ),
+    )
+    prevent.add_argument(
+        "--prevent-max-rotations", type=int,
+        default=(
+            int(_env("AGENTSONAR_PREVENT_MAX_ROTATIONS", "") or "0") or None
+        ),
+        help=(
+            "Trip Prevent Mode at exactly this rotation count instead of "
+            "waiting for CRITICAL severity. Only meaningful with "
+            "--prevent-cyclic-delegation. Env: "
+            "AGENTSONAR_PREVENT_MAX_ROTATIONS."
+        ),
+    )
+
     out = p.add_argument_group("output")
     out.add_argument(
         "--no-console", action="store_true",
@@ -154,7 +199,7 @@ def _cli_to_config(args: argparse.Namespace) -> dict:
     Only includes keys the user overrode or the SDK expects by name — keeps
     the dict minimal so the SDK's own defaults apply where we didn't touch.
     """
-    return {
+    cfg: dict = {
         "log_dir": args.log_dir,
         "warning_threshold": args.warning_threshold,
         "critical_threshold": args.critical_threshold,
@@ -168,6 +213,16 @@ def _cli_to_config(args: argparse.Namespace) -> dict:
         "file_output": not args.no_report,
         "report_title": args.report_title,
     }
+    # Prevent Mode (opt-in). Only attach the prevent dict when the user
+    # explicitly enabled it; otherwise the SDK runs in pure detection mode.
+    if args.prevent_cyclic_delegation:
+        if args.prevent_max_rotations is not None:
+            cfg["prevent"] = {
+                "cyclic_delegation": {"max_rotations": args.prevent_max_rotations}
+            }
+        else:
+            cfg["prevent"] = {"cyclic_delegation": True}
+    return cfg
 
 
 # Parse CLI at import time so `sonar` is constructed with the right config
@@ -265,6 +320,47 @@ class Handler(BaseHTTPRequestHandler):
         if body is not None:
             self.wfile.write(body)
 
+    def _respond_prevent(self, exc: PreventError) -> None:
+        """Respond 409 + RFC 7807 Problem Details when Prevent Mode trips.
+
+        The TS client looks for `status==409 + content-type
+        application/problem+json + body.agentsonar` to decide whether to
+        throw PreventError into the user's code. All three guards must
+        line up so a misconfigured proxy returning 409 from somewhere
+        else can't accidentally trip the client's exception path.
+
+        See: docs/problems/coordination-prevented.md
+        """
+        body_obj = {
+            "type": (
+                "https://github.com/agentsonar/agentsonar/blob/main/"
+                "docs/problems/coordination-prevented.md"
+            ),
+            "title": "Coordination Failure Prevented",
+            "status": 409,
+            "detail": exc.reason,
+            "instance": "/ingest",
+            "agentsonar": {
+                "failure_class": exc.failure_class,
+                "severity": exc.severity,
+                "rotations": exc.rotations,
+                "cycle_path": list(exc.cycle_path),
+                "reason": exc.reason,
+                "timestamp": exc.timestamp,
+            },
+        }
+        body = json.dumps(body_obj).encode("utf-8")
+        self.send_response(409)
+        self.send_header("content-type", "application/problem+json")
+        self.send_header("content-length", str(len(body)))
+        # Discourage caching of this informational state response.
+        self.send_header("cache-control", "no-cache, no-store")
+        # Cheap observability for proxy/log debugging - the prevent
+        # cause is visible without parsing the body.
+        self.send_header("x-agentsonar-prevent", exc.failure_class)
+        self.end_headers()
+        self.wfile.write(body)
+
     # --- Endpoints --------------------------------------------------------
 
     def do_POST(self) -> None:
@@ -306,6 +402,14 @@ class Handler(BaseHTTPRequestHandler):
             # serializing concurrent POSTs doesn't become a bottleneck.
             with _sonar_lock:
                 sonar.delegation(source=source, target=target)
+        except PreventError as e:
+            # Prevent Mode tripped. Return a structured 409 so the TS
+            # client can throw PreventError into the user's code.
+            # This is the ONLY exception type the sidecar surfaces as
+            # a non-2xx response — every other exception is swallowed
+            # to preserve the host-safety contract.
+            self._respond_prevent(e)
+            return
         except Exception as e:
             # Host-safety principle from the SDK: never crash on bad input
             sys.stderr.write(f"[sidecar] delegation() threw: {e}\n")
