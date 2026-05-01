@@ -39,6 +39,8 @@ python node_modules/@agentsonar/oma/sidecar/sidecar.py
 
 Requirements: Node 18+, Python 3.10+.
 
+> **Heads up:** starting in `agentsonar` 0.4.0, the Python sidecar sends one anonymous session-start event per run (install ID, version, OS, adapter, no agent content). On by default, opt-out with `AGENTSONAR_TELEMETRY=off` or `DO_NOT_TRACK=1` in the sidecar's environment before starting it. [Full details](https://www.agent-sonar.com/telemetry).
+
 ## Quickstart
 
 ```ts

@@ -234,7 +234,7 @@ _config = _cli_to_config(_args)
 # State
 # ----------------------------------------------------------------------
 
-sonar = monitor_orchestrator(_config)
+sonar = monitor_orchestrator(_config, adapter="oma_sidecar")
 
 # ThreadingHTTPServer dispatches requests on concurrent threads. The
 # AgentSonar engine's internal graph/detector state isn't guaranteed to
