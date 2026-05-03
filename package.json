@@ -1,7 +1,7 @@
 {
   "name": "@agentsonar/oma",
-  "version": "0.2.1",
-  "description": "AgentSonar integration for Open Multi-Agent (OMA): bridges OMA task graphs and trace events to the AgentSonar coordination engine.",
+  "version": "0.2.2",
+  "description": "AgentSonar integration for Open Multi-Agent (OMA) and any Node multi-agent bus: bridges agent-to-agent events to the AgentSonar coordination engine.",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -20,7 +20,7 @@
     "build": "tsc",
     "demo": "tsx examples/demo.ts",
     "prevent-demo": "tsx examples/prevent.demo.ts",
-    "test": "node --test --import tsx tests/safety.test.ts tests/edges.test.ts tests/trace.test.ts tests/prevent.test.ts tests/sidecar.test.ts",
+    "test": "node --test --import tsx tests/safety.test.ts tests/edges.test.ts tests/trace.test.ts tests/prevent.test.ts tests/sidecar.test.ts tests/record.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "engines": {

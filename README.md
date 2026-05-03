@@ -72,6 +72,34 @@ await shutdown()                        // write the report and close the sideca
 
 The sidecar must be running. The simplest setup is a separate terminal; for production, spawn it as a subprocess from your application.
 
+## Using outside OMA: event-driven buses (Electron, EventEmitter, custom orchestrators)
+
+`emitDelegations` is built around OMA's task-graph pattern (you pass a list of tasks with `dependsOn` arrays and it walks the DAG). For setups where agents communicate through a bus or EventEmitter in real time, the right primitive is `recordDelegation`. It takes one edge directly:
+
+```ts
+import { recordDelegation } from '@agentsonar/oma'
+
+class AgentBus extends EventEmitter {
+  send(from: string, to: string, message: unknown) {
+    this.emit(`agent:${to}`, { from, message })
+    // Fire-and-forget: never blocks the bus, never throws on network errors
+    recordDelegation(from, to).catch(() => {})
+  }
+}
+```
+
+That's the whole integration. The sidecar still runs separately on `localhost:8787`, your Node app stays Node-only, and every coordination failure (cycles, repetition, cost spikes) shows up in the same HTML report.
+
+Optional metadata for breadcrumbs in the report:
+
+```ts
+recordDelegation(from, to, {
+  metadata: { taskId: 'task-42', sessionId: 'sess-01', via: 'electron_bus' },
+}).catch(() => {})
+```
+
+Same safety contract as everything else in the package: never blocks longer than `timeoutMs` (default 2 s), silently swallows network errors, only `PreventError` propagates (and only when Prevent Mode is enabled on the sidecar).
+
 ## Run the included demo
 
 Two terminals.

@@ -498,6 +498,124 @@ export async function emitDelegations(
 }
 
 /**
+ * Record a single agent-to-agent delegation event directly.
+ *
+ * Unlike `emitDelegations` (which derives edges from a task DAG's
+ * `dependsOn` structure), this function takes one edge as direct
+ * arguments. Use it when your application has an event-driven bus or
+ * direct hand-off pattern where you know in real time that agent A
+ * just delegated to agent B.
+ *
+ * Typical usage from a Node bus (e.g. an Electron app's EventEmitter
+ * routing layer):
+ *
+ *     import { recordDelegation } from '@agentsonar/oma'
+ *
+ *     class AgentBus extends EventEmitter {
+ *       send(from: string, to: string, msg: unknown) {
+ *         this.emit(`agent:${to}`, { from, msg })
+ *         recordDelegation(from, to).catch(() => {})  // fire-and-forget
+ *       }
+ *     }
+ *
+ * Same host-safety contract as every other public function in this
+ * package: never blocks longer than the configured timeout, never
+ * throws on bad input or network failure. The ONE exception type
+ * allowed to propagate is `PreventError` (same as `emitDelegations`),
+ * raised when the sidecar reports Prevent Mode has tripped.
+ *
+ * @param source The agent doing the delegating (non-empty string).
+ * @param target The agent receiving the work (non-empty string).
+ * @param opts.metadata Optional dict of breadcrumbs to attach to the
+ *   event (e.g. `{ taskId, sessionId, via: 'bus' }`). Stored on the
+ *   sidecar side and surfaced in the report.
+ * @param opts.endpoint, opts.timeoutMs, opts.debug: same as for the
+ *   other public functions; see AgentSonarOptions.
+ * @returns Promise<boolean>: `true` if the event was attempted with
+ *   valid inputs, `false` if input validation rejected the call.
+ *   "Attempted" means the POST was issued; success of the network
+ *   call is intentionally NOT exposed (fire-and-forget contract).
+ */
+export async function recordDelegation(
+  source: string,
+  target: string,
+  opts: AgentSonarOptions & { metadata?: Record<string, unknown> } = {},
+): Promise<boolean> {
+  // Outer try/catch: defense in depth. Mirrors emitDelegations.
+  try {
+    // Defensive normalization: JS callers can pass null, a string, a number,
+    // or other non-object garbage where opts is supposed to be a dict.
+    // The default = {} only triggers on undefined. Coerce anything else to
+    // an empty object so downstream code (resolveTimeout, opts.metadata,
+    // etc.) never sees a non-object and we never need ?. or null guards.
+    if (!opts || typeof opts !== 'object' || Array.isArray(opts)) {
+      opts = {}
+    }
+
+    // Input validation. Reject silently on bad input; never throw.
+    if (typeof source !== 'string' || source.length === 0) return false
+    if (typeof target !== 'string' || target.length === 0) return false
+
+    const endpoint = resolveEndpoint(opts)
+    const debug = opts.debug ?? false
+    const timeoutMs = resolveTimeout(opts)
+
+    // Build the wire payload. The sidecar's /ingest accepts
+    // {source, target, timestamp, metadata?}. We tag every edge with
+    // `via: 'direct'` so reports can distinguish edges recorded via
+    // recordDelegation from edges derived through emitDelegations
+    // (which uses `via: 'task_dependency'`). User-supplied metadata
+    // wins on key collision.
+    //
+    // Reject non-plain-object metadata (arrays, Maps, Sets, etc.):
+    // typeof checks pass for arrays in JS, and spreading an array into
+    // an object produces numeric-string keys ({"0": ..., "1": ...})
+    // which is technically valid but makes reports ugly. Filter to
+    // plain dicts only.
+    const userMeta = opts.metadata
+    const metadata: Record<string, unknown> =
+      userMeta &&
+      typeof userMeta === 'object' &&
+      !Array.isArray(userMeta) &&
+      Object.getPrototypeOf(userMeta) === Object.prototype
+        ? { via: 'direct', ...userMeta }
+        : { via: 'direct' }
+
+    await post(
+      `${endpoint}/ingest`,
+      {
+        source,
+        target,
+        timestamp: Date.now() / 1000,
+        metadata,
+      },
+      debug,
+      timeoutMs,
+      endpoint,
+    )
+    return true
+  } catch (err) {
+    // PreventError is the ONE exception type allowed to propagate;
+    // same contract as emitDelegations.
+    if (err instanceof PreventError) {
+      throw err
+    }
+    // Belt-and-suspenders. Any other surprise stays caught.
+    try {
+      if (opts?.debug) {
+        console.error(
+          '[agentsonar-oma] recordDelegation: unexpected error:',
+          err,
+        )
+      }
+    } catch {
+      /* swallow */
+    }
+    return false
+  }
+}
+
+/**
  * Return an onTrace handler that forwards trace events to the sidecar.
  *
  * Usage — compose with an existing handler if you have one:
